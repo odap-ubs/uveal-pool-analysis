@@ -1,0 +1,168 @@
+---
+title: "Descriptive table"
+author: "García-Mulero S"
+date: "12/30/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load packages
+```{r}
+library(compareGroups)
+```
+
+Load data
+```{r}
+load("data/clin-ex-info_ALL.Rdata")
+```
+
+Add more information to dat
+```{r}
+head(infoClin); dim(infoClin) 
+clinTCGA <- merge(clinTCGA, infoClin[, c("id", "age", "gender", "weight", "tumor_stage")], by="id")
+infoClin2 <- read.table("data/uvm_tcga_clinical_data.tsv", sep="\t", header=T, stringsAsFactors=F)                                                          
+clinTCGA <- merge(clinTCGA, infoClin2[, c("Patient.ID", "Neoplasm.Histologic.Type.Name", "Tumor.Tissue.Site", "Tumor.Basal.Diameter")], by.x="id", by.y="Patient.ID")
+
+# ADD CHR3 DATA
+table(clinTCGA$chr3_status)
+clin1$chr3_status <- clin1$Chr.3
+table(clin1$chr3_status)
+clin1$chr3_status[clin1$chr3_status=="n"] = NA
+clin1$chr3_status[clin1$chr3_status=="d"] = "disomy"
+clin1$chr3_status[clin1$chr3_status=="m"] = "monosomy"
+
+clin2$chr3_status <- clin2$"chromosome 3 status:ch1"
+table(clin2$chr3_status)
+clin3$chr3_status <- clin3$"chromosome 3 status:ch1"
+table(clin3$chr3_status)
+clin3$chr3_status <- ifelse(clin3$chr3_status=="Disomy 3", "disomy", "monosomy")
+clin4$chr3_status <- NA
+
+# ADD SEX INFO
+table(clinTCGA$gender, exclude=NULL)
+clinTCGA$Sex <- clinTCGA$gender
+clinTCGA$Sex <- ifelse(clinTCGA$Sex=="female", "Female", "Male")
+
+table(clin1$Gender,exclude=NULL)
+clin1$Sex <- ifelse(clin1$Gender=="f", "Female", "Male")
+
+table(clin2$"gender:ch1",exclude=NULL)
+clin2$Sex <- ifelse(clin2$"gender:ch1"=="female", "Female", "Male")
+
+clin3$Sex <- NA
+clin4$Sex <- NA
+
+# ADD AGE
+summary(clinTCGA$age)
+clinTCGA$Age <- clinTCGA$age
+
+summary(clin1$"Age.at.proced")
+clin1$Age <- clin1$"Age.at.proced"
+
+summary(clin2$"age:ch1")
+clin2$Age <- as.numeric(clin2$"age:ch1")
+
+summary(clin3$"age at enucleation (years):ch1")
+clin3$Age <- as.numeric(clin3$"age at enucleation (years):ch1")
+
+clin4$Age <- NA
+
+# ADD TUMOR TISSUE SITE
+table(clinTCGA$Tumor.Tissue.Site, exclude=NULL)
+clinTCGA$Location <- clinTCGA$Tumor.Tissue.Site
+
+table(clin1$Location, exclude=NULL)
+clin1$Location <- clin1$Location
+
+table(clin2$"tumor location:ch1", exclude=NULL)
+clin2$Location <- clin2
+
+# ADD TUMOR histology
+table(clinTCGA$Neoplasm.Histologic.Type.Name, exclude=NULL)
+clinTCGA$Cell.type <- clinTCGA$Neoplasm.Histologic.Type.Name
+clinTCGA$Cell.type[clinTCGA$Neoplasm.Histologic.Type.Name== "Epithelioid Cell"] = "Epithelioid"
+clinTCGA$Cell.type[clinTCGA$Neoplasm.Histologic.Type.Name== "Spindle Cell"] = "Spindle"
+clinTCGA$Cell.type[clinTCGA$Neoplasm.Histologic.Type.Name== "Epithelioid Cell|Spindle Cell"] = "Mixed"
+clinTCGA$Cell.type[clinTCGA$Neoplasm.Histologic.Type.Name== "Spindle Cell|Epithelioid Cell"] = "Mixed"
+clinTCGA$Cell.type <- NA
+
+table(clin1$Cell.type, exclude=NULL)
+clin1$Cell.type <- clin1$Cell.type
+clin1$Cell.type[clin1$Cell.type== "epithelioid"] = "Epithelioid"
+clin1$Cell.type[clin1$Cell.type== "mixed"] = "Mixed"
+clin1$Cell.type[clin1$Cell.type== "spindle"] = "Spindle"
+
+table(clin2$"tumor cell type:ch1", exclude=NULL)
+clin2$Cell.type[clin2$"tumor cell type:ch1"== "epithelioid"] = "Epithelioid"
+clin2$Cell.type[clin2$"tumor cell type:ch1"== "mixed"] = "Mixed"
+
+clin3$Cell.type <- NA
+clin4$Cell.type <- NA
+```
+
+
+Merge and parse table
+```{r}
+
+### Merge all info
+clin <- rbind(clinTCGA[,c("ID", "Age", "Sex", "chr3_status", "Cell.type", "DFS", "DFS.Months", "dataset")],
+  clin1[,c("ID", "Age", "Sex", "chr3_status", "Cell.type", "DFS", "DFS.Months", "dataset")],
+  clin2[,c("ID", "Age", "Sex", "chr3_status", "Cell.type", "DFS", "DFS.Months", "dataset")],
+  clin3[,c("ID", "Age", "Sex", "chr3_status", "Cell.type", "DFS", "DFS.Months", "dataset")],
+  clin4[,c("ID", "Age", "Sex", "chr3_status", "Cell.type", "DFS", "DFS.Months", "dataset")]) ## 213 samples
+dat <- clin
+
+dat$chr3_status <- as.character(dat$chr3_status)
+dat$Cell.type <- as.character(dat$Cell.type)
+dat$Sex <- as.character(dat$Sex)
+dat$chr3_status[is.na(dat$chr3_status)] = "NA"
+dat$Sex[is.na(dat$Sex)] = "NA"
+dat$Cell.type[is.na(dat$Cell.type)] = "NA"
+
+
+dat$chr3_status <- factor(dat$chr3_status, levels=c("disomy", "partial monosomy", "monosomy", "NA"))
+dat$Cell.type <- factor(dat$Cell.type, levels=c("Epithelioid", "Mixed", "NP", "Spindle", "NA"))
+dat$Sex <- factor(dat$Sex)
+dat$DFS <- factor(dat$DFS)
+```
+
+
+Descriptive table entire cohort
+```{r}
+table_ALL <- compareGroups(~., dat)
+res_table_ALL <- createTable(table_ALL, 
+show.all=TRUE)
+print(res_table_ALL, header.labels = c("all" = "Entire cohort"))
+export2csv(res_table_ALL, file = "ALL_descriptive_table.txt", header.labels = c("all" = "Entire cohort"))
+```
+
+
+Descriptive table by dataset
+```{r}
+table_ALL3 <- compareGroups(dataset ~ ., data= dat, simplify = FALSE)
+res_table_ALL3 <- createTable(table_ALL3)
+print(res_table_ALL3)
+
+export2csv(res_table_ALL3, file = "ALL_descriptive_table3.txt")
+
+# compare p-val between datasets
+dat$Sex <- factor(dat$Sex)
+dat$dataset <- factor(dat$dataset)
+table.sex <- table(dat$Sex,dat$dataset, exclude=TRUE)
+table.sex <- table.sex[, c(1,2,5)]
+chisq.test(table.sex)
+
+dat$chr3_status <- factor(dat$chr3_status)
+table.chr <- table(dat$chr3_status, dat$dataset, exclude=TRUE)
+table.chr <- table.chr[c(1:4), c(1,2,4,5)]
+chisq.test(table.chr)
+
+dat$Cell.type <- factor(dat$Cell.type)
+table.cell <- table(dat$Cell.type, dat$dataset, exclude=TRUE)
+table.cell <- table.cell[c(1,2,4), c(1,2,5)]
+chisq.test(table.cell)
+```
+

@@ -1,0 +1,815 @@
+---
+title: "Code for pool analysis"
+author: "García-Mulero S"
+date: "12/30/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Meta-analysis
+
+Load packages
+```{r cars}
+require(reshape); require(ggplot2); library(ggpubr); library(ggthemes); 
+library(survival); library(survminer)
+library(meta);  library(meta)
+```
+
+## Load all data and join
+
+# TCGA dataset
+```{r}
+load("data/uveal_tcga_2020.Rdata")
+exTCGA <- ex
+infoClin$Recurrence <- ifelse(infoClin$DFS==1, "Recurrent", "Non-recurrent")
+clinTCGA <- infoClin
+clinTCGA$dataset <- "TCGA"
+clinTCGA$ID <- clinTCGA$id
+
+ips_tcga <- read.table("data/IPS_TCGA.txt", sep="\t", stringsAsFactors=FALSE, header=TRUE)
+mcp_tcga <- read.table("data/MCPcounter_TCGA.txt", sep="\t", stringsAsFactors=FALSE, header=TRUE)
+est_tcga <- read.table("data/ESTIMATE_TCGA.txt", sep="\t", stringsAsFactors=FALSE, header=TRUE)
+quantiseq_tcga <- read.table("data/quantiseq_TCGA.txt", sep="\t", stringsAsFactors=FALSE, header=TRUE)
+```
+
+# GSE27831
+```{r}
+load("data/uveal_GSE27831_def.Rdata")
+ex1 <- ex; clin1 <- clin
+clin1$annot <- "GPL570"
+clin1$dataset <- "GSE27831"
+
+ips1 <- read.table("data/GSE27831/IPS.txt", sep="\t", stringsAsFactors=FALSE, header=TRUE)
+mcp1 <- read.table("data/GSE27831/MCPcounter.txt", sep="\t", stringsAsFactors=FALSE, header=TRUE)
+est1 <- read.table("data/GSE27831/ESTIMATE.txt", sep="\t", stringsAsFactors=FALSE, header=TRUE)
+quantiseq1 <- read.table("data/GSE27831/quantiseq.txt", sep="\t", stringsAsFactors=FALSE, header=TRUE)
+```
+
+# GSE22138
+```{r}
+load("data/uveal_GSE22138_def.Rdata")
+ex2 <- ex; 
+clin2 <- clin
+clin2$annot <- "GPL570"
+clin2$dataset <- "GSE22138"
+
+ips2 <- read.table("data/GSE22138/IPS.txt", sep="\t", stringsAsFactors=FALSE, header=TRUE)
+mcp2 <- read.table("data/GSE22138/MCPcounter.txt", sep="\t", stringsAsFactors=FALSE, header=TRUE)
+est2 <- read.table("data/GSE22138/ESTIMATE.txt", sep="\t", stringsAsFactors=FALSE, header=TRUE)
+quantiseq2 <- read.table("data/GSE22138/quantiseq.txt", sep="\t", stringsAsFactors=FALSE, header=TRUE)
+```
+
+# GSE84976
+```{r}
+load("data/uveal_GSE84976_def.Rdata")
+ex3 <- ex; ex3 <- as.data.frame(ex3)
+clin3 <- clin
+clin3$annot <- "GPL10558"
+clin3$dataset <- "GSE84976"
+clin3$DFS <- clin3$OS
+clin3$DFS.Months <- clin3$OS.Months
+
+ips3 <- read.table("data/GSE84976/IPS.txt", sep="\t", stringsAsFactors=FALSE, header=TRUE)
+mcp3 <- read.table("data/GSE84976/MCPcounter.txt", sep="\t", stringsAsFactors=FALSE, header=TRUE)
+est3 <- read.table("data/GSE84976/ESTIMATE.txt", sep="\t", stringsAsFactors=FALSE, header=TRUE)
+quantiseq3 <- read.table("data/GSE84976/quantiseq.txt", sep="\t", stringsAsFactors=FALSE, header=TRUE)
+```
+
+# GSE73652
+```{r}
+load("data/uveal_GSE73652_def.Rdata")
+ex4 <- ex; ex4 <- as.data.frame(ex4)
+clin4 <- clin
+clin4$annot <- "GPL10558"
+clin4$dataset <- "GSE73652"
+clin4$DFS.Months <- NA
+
+ips4 <- read.table("data/GSE73652/IPS.txt", sep="\t", stringsAsFactors=FALSE, header=TRUE)
+mcp4 <- read.table("data/GSE73652/MCPcounter.txt", sep="\t", stringsAsFactors=FALSE, header=TRUE)
+est4 <- read.table("data/GSE73652/ESTIMATE.txt", sep="\t", stringsAsFactors=FALSE, header=TRUE)
+quantiseq4 <- read.table("data/GSE73652/quantiseq.txt", sep="\t", stringsAsFactors=FALSE, header=TRUE)
+```
+
+# join all clinical
+```{r}
+clin <- rbind(clinTCGA[,c(107, 95:96, 106)],
+  clin1[, c(1, 19:20, 22)],
+  clin2[, c(16, 17:18, 20)],
+  clin3[, c(7, 12:13, 11)],
+  clin4[, c(9, 10, 13, 12)]) ## 213 samples
+dat <- clin
+```
+
+
+## Function Meta-analysis Cox (several studies, one score)
+```{r}
+#########################################
+meta_calculate <- function(dat, score){
+  meta.df <- list()
+  for (i in unique(dat$dataset)){ # for each dataset
+    dati <- dat[dat$dataset==i,] # take values of only one dataset
+    meta <- data.frame("Study"=c(NA), "HR"=c(NA), "error.HR" = c(NA)) # create empty df
+    cox <- coxph(Surv(DFS.Months, DFS) ~ dati[,score], data=dati) # calculate cox
+    meta$Study[1] <- i # add info of cox results for this study
+    meta$HR[1] <-summary(cox)$coefficients[2]
+    meta$error.HR[1] <- summary(cox)$coefficients[3]
+    meta.df[[i]] <- meta
+  }
+  meta.df <- do.call(rbind, meta.df) # joint all results in one df
+  return(meta.df)
+}
+#########################################
+
+```
+
+
+## Function Pool analysis Cox (several scores)
+```{r}
+#########################################
+pool_calculate <- function(dat){
+  meta.df <- list()
+  for (i in 5:ncol(dat)){ # from column 5 are all the scores (can change)
+    meta <- data.frame("Score"=c(NA), "HR"=c(NA), "error.HR" = c(NA)) # create df
+    cox <- coxph(Surv(DFS.Months, DFS) ~ dat[,i] + strata(dataset), data=dat) # cox
+    meta$Score[1] <- colnames(dat)[i] # add all data for this score
+    meta$HR[1] <-summary(cox)$coefficients[2]
+    meta$error.HR[1] <- summary(cox)$coefficients[3]
+    meta.df[[i]] <- meta
+  }
+  meta.df <- do.call(rbind, meta.df)
+  return(meta.df)
+}
+#########################################
+
+```
+
+
+## Meta-analysis IPS 
+```{r}
+ips <- cbind(ips_tcga, ips1, ips2, ips3)
+ips <- t(ips)
+rownames(ips) <- gsub("\\.", "-", rownames(ips))
+ips <- 100*(ips)
+
+# merge
+dat_ips <- merge(dat, ips, by.x="ID", by.y="row.names")
+dat_ips <- dat_ips[,c(1:9)]
+colnames(dat_ips)[5:9] <- c("Antigen presentation", "Effector cells", "Supressor cells", "Checkpoints", "Aggregated Score")
+
+## Meta-analysis dataset per dataset for each score
+meta.df1 <- meta_calculate(dat=dat_ips, score="Antigen presentation")
+meta.res1 <- metagen(TE=log(HR), seTE=error.HR, data=meta.df1, sm = "HR", studlab=Study, comb.fixed=FALSE)
+print(meta.res1, digits=2)
+
+jpeg("res/uveal_meta-analysis_all_IPS_AP.jpg", 
+  bg = "white", res = 600, width = 4, height = 2, units = "in")
+forest(meta.res1,
+     sortvar=TE, 
+     comb.fixed=FALSE,
+     rightcols=c("w.random"),
+     rightlabs = c("Weight"),
+     test.overall.random = TRUE,
+     leftcols=c("studlab", "effect", "ci"),
+     leftlabs=c("Study","HR","95% CI"),
+     smlab = "",
+     text.random = "Overall effect",
+     print.tau2 = FALSE,
+     col.diamond.lines = "black",
+     col.predict = "black",
+     print.I2.ci = FALSE,
+     digits.sd = 2,
+     fontsize= 8,
+     plotwidth="1.5inch",
+     just="left",
+     spacing=.8,
+     addrow=FALSE, addrow.overall=FALSE)
+grid.text(expression(bold("Antigen presentation")), .5, .9, gp = gpar(fontsize=8))
+
+dev.off()
+   
+
+meta.df2 <- meta_calculate(dat=dat_ips, score="Effector cells")
+meta.res2 <- metagen(TE=log(HR), seTE=error.HR, data=meta.df2, sm = "HR", studlab=Study, comb.fixed=FALSE)
+print(meta.res2, digits=2)
+
+jpeg("res/uveal_meta-analysis_all_IPS_EC.jpg", 
+  bg = "white", res = 600, width = 4, height = 2, units = "in")
+forest(meta.res2,
+     sortvar=TE, 
+     comb.fixed=FALSE,
+     rightcols=c("w.random"),
+     rightlabs = c("Weight"),
+     test.overall.random = TRUE,
+     leftcols=c("studlab", "effect", "ci"),
+     leftlabs=c("Study","HR","95% CI"),
+     text.random = "Overall effect",
+     print.tau2 = FALSE,
+     col.diamond.lines = "black",
+     col.predict = "black",
+     print.I2.ci = FALSE,
+     digits.sd = 2,
+     fontsize= 8,
+     plotwidth="1.5inch",
+     just="left",
+     spacing=.8,
+     addrow=FALSE, addrow.overall=FALSE)
+grid.text(expression(bold("Effector cells")), .5, .9, gp = gpar(fontsize=8))
+
+dev.off()
+
+meta.df3 <- meta_calculate(dat=dat_ips, score="Supressor cells")
+meta.res3 <- metagen(TE=log(HR), seTE=error.HR, data=meta.df3, sm = "HR", studlab=Study, comb.fixed=FALSE)
+print(meta.res3, digits=2)
+
+jpeg("res/uveal_meta-analysis_all_IPS_SC.jpg", 
+  bg = "white", res = 600, width = 4, height = 2, units = "in")
+forest(meta.res3,
+     sortvar=TE, 
+     comb.fixed=FALSE,
+     rightcols=c("w.random"),
+     rightlabs = c("Weight"),
+     test.overall.random = TRUE,
+     leftcols=c("studlab", "effect", "ci"),
+     leftlabs=c("Study","HR","95% CI"),
+     text.random = "Overall effect",
+     print.tau2 = FALSE,
+     col.diamond.lines = "black",
+     col.predict = "black",
+     print.I2.ci = FALSE,
+     digits.sd = 2,
+     fontsize= 8,
+     plotwidth="1.5inch",
+     just="left",
+     spacing=.8,
+     addrow=FALSE, addrow.overall=FALSE)
+grid.text(expression(bold("Supressor cells")), .5, .9, gp = gpar(fontsize=8))
+
+dev.off()
+
+meta.df4 <- meta_calculate(dat=dat_ips, score="Aggregated Score")
+meta.res4 <- metagen(TE=log(HR), seTE=error.HR, data=meta.df4, sm = "HR", studlab=Study, comb.fixed=FALSE)
+print(meta.res4, digits=2)
+
+jpeg("res/uveal_meta-analysis_all_IPS_Aggregated.jpg", 
+  bg = "white", res = 600, width = 4, height = 2, units = "in")
+forest(meta.res4,
+     sortvar=TE, 
+     comb.fixed=FALSE,
+     rightcols=c("w.random"),
+     rightlabs = c("Weight"),
+     test.overall.random = TRUE,
+     leftcols=c("studlab", "effect", "ci"),
+     leftlabs=c("Study","HR","95% CI"),
+     text.random = "Overall effect",
+     print.tau2 = FALSE,
+     col.diamond.lines = "black",
+     col.predict = "black",
+     print.I2.ci = FALSE,
+     digits.sd = 2,
+     fontsize= 8,
+     plotwidth="1.5inch",
+     just="left",
+     spacing=.8,
+     addrow=FALSE, addrow.overall=FALSE)
+grid.text(expression(bold("Aggregated Immunophenoscore")), .5, .9, gp = gpar(fontsize=8))
+
+dev.off()
+
+meta.df5 <- meta_calculate(dat=dat_ips, score="Checkpoints")
+meta.res5 <- metagen(TE=log(HR), seTE=error.HR, data=meta.df5, sm = "HR", studlab=Study, comb.fixed=FALSE)
+print(meta.res5, digits=2)
+
+jpeg("res/uveal_meta-analysis_all_IPS_Checkpoints.jpg", 
+  bg = "white", res = 600, width = 4, height = 2, units = "in")
+forest(meta.res5,
+     sortvar=TE, 
+     comb.fixed=FALSE,
+     rightcols=c("w.random"),
+     rightlabs = c("Weight"),
+     test.overall.random = TRUE,
+     leftcols=c("studlab", "effect", "ci"),
+     leftlabs=c("Study","HR","95% CI"),
+     text.random = "Overall effect",
+     print.tau2 = FALSE,
+     col.diamond.lines = "black",
+     col.predict = "black",
+     print.I2.ci = FALSE,
+     digits.sd = 2,
+     fontsize= 8,
+     plotwidth="1.5inch",
+     just="left",
+     spacing=.8,
+     addrow=FALSE, addrow.overall=FALSE)
+grid.text(expression(bold("Checkpoints")), .5, .9, gp = gpar(fontsize=8))
+dev.off()
+```
+
+
+## Pool analysis IPS: Study stratified Cox  
+```{r}
+dat_ips$DFS <- as.numeric(dat_ips$DFS);
+dat_ips$DFS.Months <- as.numeric(dat_ips$DFS.Months)
+meta.df <- pool_calculate(dat_ips)
+
+## Meta-analysis
+meta.df <- meta.df[order(meta.df$HR, decreasing=F),]
+rownames(meta.df) <- NULL
+meta.res <- metagen(TE=log(HR), seTE=error.HR, data=meta.df, studlab=Score, sm = "HR")
+print(meta.res, digits=2)
+
+# plot
+jpeg("res/uveal_pool_analisis_all_IPS.jpg", 
+  bg = "white", res = 600, width = 4, height = 2, units = "in")
+forest(meta.res,
+     sortvar=TE, 
+     comb.fixed=FALSE,
+     overall = FALSE,
+     pooled.totals = TRUE,
+     rightcols=c("w.random"),
+     rightlabs = c("Weight"),
+     leftcols=c("studlab", "effect", "ci"),
+     leftlabs=c("Score","HR","95% CI"),
+     text.random = "Overall effect",
+     print.tau2 = FALSE,
+     col.diamond.lines = "black",
+     col.predict = "black",
+     print.I2.ci = FALSE,
+     digits.sd = 2,
+     fontsize= 8,
+     plotwidth="1.5inch",
+     just="left",
+     spacing=.8,
+     addrow=FALSE, addrow.overall=TRUE)
+
+dev.off()
+```
+
+
+## Meta-analysis ESTIMATE 
+```{r}
+est <- cbind(est_tcga, est1, est2, est3)
+est["StromalScore",]  <- (est["StromalScore",])/100
+est["ImmuneScore",]  <- (est["ImmuneScore",])/100
+est["TumorPurity",]  <- 100*(est["TumorPurity",])
+est["ESTIMATEScore",]  <- (est["ESTIMATEScore",])/100
+summary(melt(est)$value)
+
+est <- t(est)
+rownames(est) <- gsub("\\.", "-", rownames(est))
+
+# merge
+dat_est <- merge(dat, est, by.x="ID", by.y="row.names")
+
+##  Meta-analysis dataset per dataset of each score
+meta.df1 <- meta_calculate(dat=dat_est, score="StromalScore")
+meta.res1 <- metagen(TE=log(HR), seTE=error.HR, data=meta.df1, sm = "HR", studlab=Study, comb.fixed=FALSE)
+print(meta.res1, digits=2)
+
+jpeg("res/uveal_meta-analysis_all_EST_StromalScore.jpg", 
+  bg = "white", res = 600, width = 4, height = 2, units = "in")
+forest(meta.res1,
+     sortvar=TE, 
+     comb.fixed=FALSE,
+     rightcols=c("w.random"),
+     rightlabs = c("Weight"),
+     test.overall.random = TRUE,
+     leftcols=c("studlab", "effect", "ci"),
+     leftlabs=c("Study","HR","95% CI"),
+     text.random = "Overall effect",
+     print.tau2 = FALSE,
+     col.diamond.lines = "black",
+     col.predict = "black",
+     print.I2.ci = FALSE,
+     digits.sd = 2,
+     fontsize= 8,
+     plotwidth="1.5inch",
+     just="left",
+     spacing=.8,
+     addrow=FALSE, addrow.overall=FALSE)
+grid.text(expression(bold("Stromal Score")), .5, .9, gp = gpar(fontsize=8))
+
+dev.off()
+
+meta.df2 <- meta_calculate(dat=dat_est, score="ImmuneScore")
+meta.res2 <- metagen(TE=log(HR), seTE=error.HR, data=meta.df2, sm = "HR", studlab=Study, comb.fixed=FALSE)
+print(meta.res2, digits=2)
+
+jpeg("res/uveal_meta-analysis_all_EST_ImmuneScore.jpg", 
+  bg = "white", res = 600, width = 4, height = 2, units = "in")
+forest(meta.res2,
+     sortvar=TE, 
+     comb.fixed=FALSE,
+     rightcols=c("w.random"),
+     rightlabs = c("Weight"),
+     test.overall.random = TRUE,
+     leftcols=c("studlab", "effect", "ci"),
+     leftlabs=c("Study","HR","95% CI"),
+     text.random = "Overall effect",
+     print.tau2 = FALSE,
+     col.diamond.lines = "black",
+     col.predict = "black",
+     print.I2.ci = FALSE,
+     digits.sd = 2,
+     fontsize= 8,
+     plotwidth="1.5inch",
+     just="left",
+     spacing=.8,
+     addrow=FALSE, addrow.overall=FALSE)
+grid.text(expression(bold("Immune Score")), .5, .9, gp = gpar(fontsize=8))
+
+dev.off()
+
+
+meta.df3 <- meta_calculate(dat=dat_est, score="ESTIMATEScore")
+meta.res3 <- metagen(TE=log(HR), seTE=error.HR, data=meta.df3, sm = "HR", studlab=Study, comb.fixed=FALSE)
+print(meta.res3, digits=2)
+
+jpeg("res/uveal_meta-analysis_all_EST_ESTIMATEScore.jpg", 
+  bg = "white", res = 600, width = 4, height = 2, units = "in")
+forest(meta.res3,
+     sortvar=TE, 
+     comb.fixed=FALSE,
+     rightcols=c("w.random"),
+     rightlabs = c("Weight"),
+     test.overall.random = TRUE,
+     leftcols=c("studlab", "effect", "ci"),
+     leftlabs=c("Study","HR","95% CI"),
+     text.random = "Overall effect",
+     print.tau2 = FALSE,
+     col.diamond.lines = "black",
+     col.predict = "black",
+     print.I2.ci = FALSE,
+     digits.sd = 2,
+     fontsize= 8,
+     plotwidth="1.5inch",
+     just="left",
+     spacing=.8,
+     addrow=FALSE, addrow.overall=FALSE)
+grid.text(expression(bold("ESTIMATE Score")), .5, .9, gp = gpar(fontsize=8))
+
+dev.off()
+
+
+meta.df4 <- meta_calculate(dat=dat_est, score="TumorPurity")
+meta.res4 <- metagen(TE=log(HR), seTE=error.HR, data=meta.df4, sm = "HR", studlab=Study, 
+  comb.fixed=FALSE, title="tumorpuritytest", keepdata=F)
+print(meta.res4, digits=2)
+
+jpeg("res/uveal_meta-analysis_all_EST_TumorPurity.jpg", 
+  bg = "white", res = 600, width = 4, height = 2, units = "in")
+forest(meta.res4,
+     sortvar=TE, 
+     comb.fixed=FALSE,
+     rightcols=c("w.random"),
+     rightlabs = c("Weight"),
+     test.overall.random = TRUE,
+     leftcols=c("studlab", "effect", "ci"),
+     leftlabs=c("Study","HR","95% CI"),
+     text.random = "Overall effect",
+     print.tau2 = FALSE,
+     col.diamond.lines = "black",
+     col.predict = "black",
+     print.I2.ci = FALSE,
+     digits.sd = 2,
+     fontsize= 8,
+     plotwidth="1.5inch",
+     just="left",
+     spacing=.8,
+     addrow=FALSE, addrow.overall=FALSE)
+grid.text(expression(bold("Tumor Purity")), .5, .9, gp = gpar(fontsize=8))
+
+dev.off()
+```
+
+
+## Pool analysis ESTIMATE: study stratified Cox  
+```{r}
+dat_est$DFS <- as.numeric(dat_est$DFS);
+dat_est$DFS.Months <- as.numeric(dat_est$DFS.Months)
+meta.df <- pool_calculate(dat_est)
+
+## Meta-analysis
+meta.df <- meta.df[order(meta.df$HR, decreasing=F),]
+rownames(meta.df) <- NULL
+meta.res <- metagen(TE=log(HR), seTE=error.HR, data=meta.df, studlab=Score, sm = "HR")
+print(meta.res, digits=2)
+
+# plot
+jpeg("res/uveal_pool_analysis_all_EST.jpg", 
+  bg = "white", res = 600, width = 4, height = 2, units = "in")
+forest(meta.res,
+     sortvar=TE, 
+     comb.fixed=FALSE,
+     overall = FALSE,
+     pooled.totals = TRUE,
+     rightcols=c("w.random"),
+     rightlabs = c("Weight"),
+     leftcols=c("studlab", "effect", "ci"),
+     leftlabs=c("Score","HR","95% CI"),
+     text.random = "Overall effect",
+     print.tau2 = FALSE,
+     col.diamond.lines = "black",
+     col.predict = "black",
+     print.I2.ci = FALSE,
+     digits.sd = 2,
+     fontsize= 8,
+     plotwidth="1.5inch",
+     just="left",
+     spacing=.8,
+     addrow=FALSE, addrow.overall=TRUE)
+
+dev.off()
+```
+
+
+## Pool analysis MCP-counter 
+```{r}
+mcp <- cbind(mcp_tcga, mcp1, mcp2, mcp3)
+summary(melt(mcp)$value)
+
+# merge
+dat_mcp <- merge(dat, t(mcp), by.x="ID", by.y="row.names")
+dat_mcp <- dat_mcp[, colnames(dat_mcp)!="CD8 T cells"]
+
+##  Meta-analysis dataset per dataset of interesting cell types
+
+# B cells
+meta.df1 <- meta_calculate(dat=dat_mcp, score="B lineage")
+meta.res1 <- metagen(TE=log(HR), seTE=error.HR, data=meta.df1, sm = "HR", studlab=Study, comb.fixed=FALSE)
+print(meta.res1, digits=2)
+
+jpeg("res/uveal_meta-analysis_all_mcpcounter_Bcells.jpg", 
+  bg = "white", res = 600, width = 4, height = 2, units = "in")
+forest(meta.res1,
+     sortvar=TE, 
+     comb.fixed=FALSE,
+     rightcols=c("w.random"),
+     rightlabs = c("Weight"),
+     test.overall.random = TRUE,
+     leftcols=c("studlab", "effect", "ci"),
+     leftlabs=c("Study","HR","95% CI"),
+     text.random = "Overall effect",
+     print.tau2 = FALSE,
+     col.diamond.lines = "black",
+     col.predict = "black",
+     print.I2.ci = FALSE,
+     digits.sd = 2,
+     fontsize= 8,
+     plotwidth="1.5inch",
+     just="left",
+     spacing=.8,
+     addrow=FALSE, addrow.overall=FALSE)
+grid.text(expression(bold("B cells")), .5, .9, gp = gpar(fontsize=8))
+
+dev.off()
+
+
+## Study stratified Cox  
+dat_mcp$DFS <- as.numeric(dat_mcp$DFS);
+dat_mcp$DFS.Months <- as.numeric(dat_mcp$DFS.Months)
+meta.df <- pool_calculate(dat_mcp)
+meta.df <- meta.df[order(meta.df$HR, decreasing=F),]
+rownames(meta.df) <- NULL
+meta.df
+
+## Meta-analysis
+meta.res <- metagen(TE=log(HR), seTE=error.HR, data=meta.df, studlab=Score, sm = "HR")
+print(meta.res, digits=2)
+
+# plot
+jpeg("res/uveal_pool_analisis_all_MCP-counter.jpg", 
+  bg = "white", res = 600, width = 5, height = 3, units = "in")
+forest(meta.res,
+     sortvar=TE, 
+     comb.fixed=FALSE,
+     overall = FALSE,
+     pooled.totals = TRUE,
+     rightcols=c("w.random"),
+     rightlabs = c("Weight"),
+     leftcols=c("studlab", "effect", "ci"),
+     leftlabs=c("Score","HR","95% CI"),
+     text.random = "Overall effect",
+     print.tau2 = FALSE,
+     col.diamond.lines = "black",
+     col.predict = "black",
+     print.I2.ci = FALSE,
+     digits.sd = 2,
+     fontsize= 8,
+     plotwidth="1.5inch",
+     just="left",
+     spacing=.8,
+     addrow=FALSE, addrow.overall=TRUE)
+
+dev.off()
+```
+
+
+## Pool  analysis Quantiseq 
+```{r}
+quantiseq <- cbind(quantiseq_tcga, quantiseq1, quantiseq2, quantiseq3)
+summary(melt(quantiseq)$value)
+quantiseq <- 100*(quantiseq)
+colnames(quantiseq) <- gsub("\\.", "-", colnames(quantiseq))
+
+# merge
+dat_quantiseq <- merge(dat, t(quantiseq), by.x="ID", by.y="row.names")
+head(dat_quantiseq)
+
+
+##  Meta-analysis dataset per dataset of interesting cell types
+
+# B cells
+meta.df1 <- meta_calculate(dat=dat_quantiseq, score="B cell")
+meta.res1 <- metagen(TE=log(HR), seTE=error.HR, data=meta.df1, sm = "HR", studlab=Study, comb.fixed=FALSE)
+print(meta.res1, digits=2)
+
+jpeg("res/uveal_meta-analysis_all_quantiseq_Bcells.jpg", 
+  bg = "white", res = 600, width = 4, height = 2, units = "in")
+forest(meta.res1,
+     sortvar=TE, 
+     comb.fixed=FALSE,
+     rightcols=c("w.random"),
+     rightlabs = c("Weight"),
+     test.overall.random = TRUE,
+     leftcols=c("studlab", "effect", "ci"),
+     leftlabs=c("Study","HR","95% CI"),
+     text.random = "Overall effect",
+     print.tau2 = FALSE,
+     col.diamond.lines = "black",
+     col.predict = "black",
+     print.I2.ci = FALSE,
+     digits.sd = 2,
+     fontsize= 8,
+     plotwidth="1.5inch",
+     just="left",
+     spacing=.8,
+     addrow=FALSE, addrow.overall=FALSE)
+grid.text(expression(bold("B cells")), .5, .9, gp = gpar(fontsize=8))
+
+dev.off()
+
+# Macrophage M2
+meta.df2 <- meta_calculate(dat=dat_quantiseq, score="Macrophage M2")
+meta.res2 <- metagen(TE=log(HR), seTE=error.HR, data=meta.df2, sm = "HR", studlab=Study, comb.fixed=FALSE)
+print(meta.res2, digits=2)
+
+jpeg("res/uveal_meta-analysis_all_quantiseq_MacrophageM2.jpg", 
+  bg = "white", res = 600, width = 4, height = 2, units = "in")
+forest(meta.res2,
+     sortvar=TE, 
+     comb.fixed=FALSE,
+     rightcols=c("w.random"),
+     rightlabs = c("Weight"),
+     test.overall.random = TRUE,
+     leftcols=c("studlab", "effect", "ci"),
+     leftlabs=c("Study","HR","95% CI"),
+     text.random = "Overall effect",
+     print.tau2 = FALSE,
+     col.diamond.lines = "black",
+     col.predict = "black",
+     print.I2.ci = FALSE,
+     digits.sd = 2,
+     fontsize= 8,
+     plotwidth="1.5inch",
+     just="left",
+     spacing=.8,
+     addrow=FALSE, addrow.overall=FALSE)
+grid.text(expression(bold("Macrophage M2")), .5, .9, gp = gpar(fontsize=8))
+
+dev.off()
+
+
+# NK cell
+meta.df3 <- meta_calculate(dat=dat_quantiseq, score="NK cell")
+meta.res3 <- metagen(TE=log(HR), seTE=error.HR, data=meta.df3, sm = "HR", studlab=Study, comb.fixed=FALSE)
+print(meta.res3, digits=2)
+
+jpeg("res/uveal_meta-analysis_all_quantiseq_NKcell.jpg", 
+  bg = "white", res = 600, width = 4, height = 2, units = "in")
+forest(meta.res3,
+     sortvar=TE, 
+     comb.fixed=FALSE,
+     rightcols=c("w.random"),
+     rightlabs = c("Weight"),
+     test.overall.random = TRUE,
+     leftcols=c("studlab", "effect", "ci"),
+     leftlabs=c("Study","HR","95% CI"),
+     text.random = "Overall effect",
+     print.tau2 = FALSE,
+     col.diamond.lines = "black",
+     col.predict = "black",
+     print.I2.ci = FALSE,
+     digits.sd = 2,
+     fontsize= 8,
+     plotwidth="1.5inch",
+     just="left",
+     spacing=.8,
+     addrow=FALSE, addrow.overall=FALSE)
+grid.text(expression(bold("NK cells")), .5, .9, gp = gpar(fontsize=8))
+
+dev.off()
+
+## Study stratified Cox  
+dat_quantiseq$DFS <- as.numeric(dat_quantiseq$DFS);
+dat_quantiseq$DFS.Months <- as.numeric(dat_quantiseq$DFS.Months)
+meta.df <- pool_calculate(dat_quantiseq)
+meta.df <- meta.df[order(meta.df$HR, decreasing=F),]
+meta.df
+
+## Meta-analysis
+meta.res <- metagen(TE=log(HR), seTE=error.HR, data=meta.df, studlab=Score, sm = "HR")
+print(meta.res, digits=2)
+
+# plot
+jpeg("res/uveal_pool_analisis_all_quantiseq.jpg", 
+  bg = "white", res = 600, width = 5, height = 3, units = "in")
+forest(meta.res,
+     sortvar=TE, 
+     comb.fixed=FALSE,
+     overall = FALSE,
+     pooled.totals = TRUE,
+     rightcols=c("w.random"),
+     rightlabs = c("Weight"),
+     leftcols=c("studlab", "effect", "ci"),
+     leftlabs=c("Score","HR","95% CI"),
+     text.random = "Overall effect",
+     print.tau2 = FALSE,
+     col.diamond.lines = "black",
+     col.predict = "black",
+     print.I2.ci = FALSE,
+     digits.sd = 2,
+     fontsize= 8,
+     plotwidth="1.5inch",
+     just="left",
+     spacing=.8,
+     addrow=FALSE, addrow.overall=TRUE)
+
+dev.off()
+```
+
+
+## Pool analysis consensusTME
+```{r}
+# with all signatures
+consensusTME <- ConsensusTME::consensusGeneSets$Unfiltered
+
+# perfomr GSVA function
+library(GSVA)
+GSVA.TCGA <- gsva(expr=as.matrix(exTCGA), gset.idx.list=consensusTME)
+GSVA1 <- gsva(expr=as.matrix(ex1), gset.idx.list=consensusTME)
+GSVA2 <- gsva(expr=as.matrix(ex2), gset.idx.list=consensusTME)
+GSVA3 <- gsva(expr=as.matrix(ex3), gset.idx.list=consensusTME)
+GSVA4 <- gsva(expr=as.matrix(ex4), gset.idx.list=consensusTME)
+
+# join GSVA
+GSVA <- cbind(GSVA.TCGA, GSVA1, GSVA2, GSVA3)
+
+# add to data
+summary(melt(GSVA)$value)
+consensus <- 100*(GSVA)
+
+# merge
+dat_consensus <- merge(dat, t(consensus), by.x="ID", by.y="row.names")
+head(dat_consensus)
+
+# pool analysis
+dat_consensus$DFS <- as.numeric(dat_consensus$DFS);
+dat_consensus$DFS.Months <- as.numeric(dat_consensus$DFS.Months)
+meta.df <- pool_calculate(dat_consensus)
+meta.df <- meta.df[order(meta.df$HR, decreasing=F),]
+meta.df
+
+# Meta-analysis
+meta.res <- metagen(TE=log(HR), seTE=error.HR, data=meta.df, studlab=Score, sm = "HR")
+print(meta.res, digits=2)
+
+# plot
+jpeg("res/uveal_pool_analisis_all_consensusTME.jpg", 
+  bg = "white", res = 600, width = 5, height = 4, units = "in")
+forest(meta.res,
+     sortvar=TE, 
+     comb.fixed=FALSE,
+     overall = FALSE,
+     pooled.totals = TRUE,
+     rightcols=c("w.random"),
+     rightlabs = c("Weight"),
+     leftcols=c("studlab", "effect", "ci"),
+     leftlabs=c("Score","HR","95% CI"),
+     text.random = "Overall effect",
+     print.tau2 = FALSE,
+     col.diamond.lines = "black",
+     col.predict = "black",
+     print.I2.ci = FALSE,
+     digits.sd = 2,
+     fontsize= 8,
+     plotwidth="1.5inch",
+     just="left",
+     spacing=.8,
+     addrow=FALSE, addrow.overall=TRUE)
+
+dev.off()
+```
+

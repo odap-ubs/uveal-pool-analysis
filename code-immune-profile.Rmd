@@ -1,0 +1,154 @@
+---
+title: "Immune profile"
+author: "García-Mulero S"
+date: "12/30/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Immune profiling of 5 UM datasets
+
+Load data
+```{r}
+load("data/clin-ex-info_ALL.Rdata")
+```
+
+### Repeat for each dataset
+
+## Run Immunophenoscore
+```{r}
+####################################################
+##
+##   This R-script can be used to calculate Immunophenoscore (IPS) and generate Immunophenogram from "EXPR.txt" and "IPS_genes.txt"
+##   (C) ICBI, Medical University of Innsbruck, Biocenter, Division of Bioinformatics
+##   Version 1.0 08.07.2016
+##   Dependencies ggplot2,grid,gridExtra
+##
+####################################################
+ipsmap<- function (x) {
+	if (x<=0) {
+		ips<-0
+	} else {
+		if (x>=3) {
+		 ips<-10
+		} else {
+			ips<-round(x*10/3, digits=0)
+		}
+	}
+	return(ips)
+}
+# expression data
+gene_expression <- ex
+gene_expression <- as.data.frame(ex_comb_b2)
+sample_names<-colnames(gene_expression)
+## Read IPS genes and corresponding weights from tab-delimited text file "IPS_genes.txt"
+
+IPSG<-read.table("immunophenogram/IPS_genes.txt",header=TRUE, sep="\t", dec = ".",check.names=FALSE)
+unique_ips_genes<-as.vector(unique(IPSG$NAME))
+
+##add gene values for genes not in the expression matrix
+mean_values <- apply(gene_expression, 2, mean)
+genes <- IPSG$GENE[!(IPSG$GENE %in% rownames(gene_expression))]
+for (i in 1:length(genes)){
+	gene <- genes[i]
+	gene_expression[nrow(gene_expression)+1,] <- mean_values
+	rownames(gene_expression)[nrow(gene_expression)] <- as.character(gene)
+	i <- i+1
+}
+gene_expression <- gene_expression[order(rownames(gene_expression)),]
+
+IPS<-NULL
+MHC<-NULL
+CP<-NULL
+EC<-NULL
+SC<-NULL
+AZ<-NULL
+
+for (i in 1:length(sample_names)) {
+	GE<-gene_expression[[i]]
+	mGE<-mean(GE)
+	sGE<-sd(GE)
+	Z1<-(gene_expression[as.vector(IPSG$GENE),i]-mGE)/sGE
+	W1<-IPSG$WEIGHT
+	WEIGHT<-NULL
+	MIG<-NULL
+	k<-1
+	for (gen in unique_ips_genes) {
+		MIG[k]<- mean(Z1[which (as.vector(IPSG$NAME)==gen)])
+		WEIGHT[k]<- mean(W1[which (as.vector(IPSG$NAME)==gen)])
+		k<-k+1
+	}
+	WG<-MIG*WEIGHT
+	MHC[i]<-mean(WG[1:10])
+	CP[i]<-mean(WG[11:20])
+	EC[i]<-mean(WG[21:24])
+	SC[i]<-mean(WG[25:26])
+	AZ[i]<-sum(MHC[i],CP[i],EC[i],SC[i])
+	IPS[i]<-ipsmap(AZ[i])
+}
+DF<-data.frame(SAMPLE=sample_names,MHC=MHC,EC=EC,SC=SC,CP=CP,AZ=AZ,IPS=IPS)
+rownames(DF) <- DF$SAMPLE
+DF$SAMPLE <- NULL
+ips <- t(DF)
+
+write.table(ips,file="data/IPS_TCGA.txt",
+	row.names=TRUE, col.names=TRUE, quote=FALSE,sep="\t")
+```
+
+## Run MCPcounter
+```{r}
+library(MCPcounter); 
+
+# load genes
+genes <- read.table("MCPcounter/MCPcounter_genes.txt", 
+	sep="\t", stringsAsFactors=F, colClasses="character", header=T)
+colnames(genes)[2] <- "Cell population"
+colnames(genes)[1] <- "HUGO symbols"
+
+#calculate cell populations
+mcp <- MCPcounter.estimate(ex, featuresType="HUGO_symbols")
+write.table(mcp,file="data/MCPcounter_TCGA.txt",
+	row.names=TRUE, col.names=TRUE, quote=FALSE,sep="\t")
+
+```
+
+## Run ESTIMATE
+```{r}
+library(estimate)
+# save expression data
+write.table(ex_comb, file="estimate/expression_tcga.txt", 
+  sep="\t", quote=F, col.names=TRUE, row.names=TRUE)
+
+# filter common genes
+filterCommonGenes(input.f="estimate/expression_tcga.txt", 
+                  output.f="estimate/expression_tcga.gct", id="GeneSymbol")
+
+#estimate
+estimateScore("estimate/expression_tcga.gct", "estimate/mets_estimate_scores.gct", platform="") # affimetrix or 
+est <- read.delim("estimate/mets_estimate_scores.gct", header=T, skip=2)
+est <- as.data.frame(est)
+est[,0:5]
+rownames(est) <- est$NAME
+est$Description <- NULL
+est$NAME <- NULL
+write.table(est,file="data/ESTIMATE_TCGA.txt",
+	row.names=TRUE, col.names=TRUE, quote=FALSE,sep="\t")
+
+```
+
+## Run Quantiseq
+```{r}
+library(immunedeconv)
+deconvolution_methods
+res_quantiseq1 = deconvolute(ex1, "quantiseq", tumor = TRUE)
+quantiseq1 <- as.data.frame(res_quantiseq1)
+rownames(quantiseq1) <- quantiseq1$cell_type
+quantiseq1$cell_type <- NULL;
+write.table(quantiseq1, file="data/quantiseq_TCGA.txt", col.names=T, row.names=T, sep="\t", quote=F)
+
+```
+
+

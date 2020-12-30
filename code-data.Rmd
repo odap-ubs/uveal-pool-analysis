@@ -1,0 +1,134 @@
+---
+title: "Join and save data"
+author: "García-Mulero S"
+date: "12/30/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load and generate Rdata
+
+```{r}
+# TCGA dataset
+load("data/uveal_tcga_2020.Rdata")
+exTCGA <- ex
+infoClin$Recurrence <- ifelse(infoClin$DFS==1, "Recurrent", "Non-recurrent")
+clinTCGA <- infoClin
+clinTCGA$dataset <- "TCGA"
+clinTCGA$ID <- clinTCGA$id
+
+
+# GSE27831
+load("data/uveal_GSE27831_def.Rdata")
+ex1 <- ex; clin1 <- clin
+clin1$annot <- "GPL570"
+clin1$dataset <- "GSE27831"
+
+# GSE22138
+load("data/uveal_GSE22138_def.Rdata")
+ex2 <- ex; 
+clin2 <- clin
+clin2$annot <- "GPL570"
+clin2$dataset <- "GSE22138"
+
+
+# GSE84976
+load("data/uveal_GSE84976_def.Rdata")
+ex3 <- ex; ex3 <- as.data.frame(ex3)
+clin3 <- clin
+clin3$annot <- "GPL10558"
+clin3$dataset <- "GSE84976"
+clin3$DFS <- clin3$OS
+clin3$DFS.Months <- clin3$OS.Months
+
+
+# GSE73652
+load("data/uveal_GSE73652_def.Rdata")
+ex4 <- ex; ex4 <- as.data.frame(ex4)
+clin4 <- clin
+clin4$annot <- "GPL10558"
+clin4$dataset <- "GSE73652"
+clin4$DFS.Months <- NA
+
+
+# ADD CHR3 DATA
+table(clinTCGA$chr3_status)
+clin1$chr3_status <- clin1$Chr.3
+table(clin1$chr3_status)
+clin1$chr3_status[clin1$chr3_status=="n"] = NA
+clin1$chr3_status[clin1$chr3_status=="d"] = "disomy"
+clin1$chr3_status[clin1$chr3_status=="m"] = "monosomy"
+
+clin2$chr3_status <- clin2$"chromosome 3 status:ch1"
+table(clin2$chr3_status)
+clin3$chr3_status <- clin3$"chromosome 3 status:ch1"
+table(clin3$chr3_status)
+clin3$chr3_status <- ifelse(clin3$chr3_status=="Disomy 3", "disomy", "monosomy")
+clin4$chr3_status <- NA
+
+
+# join all clinical
+clin <- rbind(clinTCGA[,c(107, 95:96, 106)],
+  clin1[, c(1, 19:20, 22)],
+  clin2[, c(16, 17:18, 20)],
+  clin3[, c(7, 12:13, 11)],
+  clin4[, c(9, 10, 13, 12)]) ## 213 samples
+dat <- clin
+
+# join all expression 
+length(Reduce(intersect, list(rownames(exTCGA),rownames(ex1), rownames(ex2), rownames(ex3), rownames(ex4)))) 
+
+common_genes <- Reduce(intersect, list(rownames(exTCGA),rownames(ex1), rownames(ex2), rownames(ex3), rownames(ex4)))
+length(common_genes)
+
+#join expression tables
+ex <- cbind(exTCGA[common_genes,],
+         ex1[common_genes,], 
+         ex2[common_genes,], 
+         ex3[common_genes,], 
+         ex4[common_genes,])
+
+ex <- ex[,colnames(ex) %in% clin$ID]
+dim(ex) 
+length(unique(colnames(ex))) #213 samples
+dat <- dat[order(dat$ID),]; ex <- ex[, order(colnames(ex))]
+identical(as.character(dat$ID), as.character(colnames(ex)))
+batch <- clin$dataset
+library(sva)
+ex_comb  <-  ComBat(dat=as.matrix(ex), batch=batch)
+
+#plot PCA after combat
+pca <- prcomp(t(ex_comb), scale=TRUE, center=TRUE); 
+PC1 <- pca$x[,1]; PC2 <- pca$x[,2]
+percent <- round((((pca$sdev)^2 / sum(pca$sdev^2))*100)[1:10],4)
+p1 <- percent[1]; p2 <- percent[2]
+
+# data for plot
+df <- data.frame("PC1"=PC1, "PC2"=PC2, "Dataset"=clin$dataset)
+ncol <- length(unique(clin$dataset))
+cols_palette1 <- brewer.pal(8, "Dark2")[c(1:4,6:8)]
+cols_palette2 <- brewer.pal(8, "Spectral")
+cols_palette <- c(cols_palette1, cols_palette2)[1:ncol]
+
+#plot
+theme<-theme(panel.background = element_blank(),panel.border=element_rect(fill=NA),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),strip.background=element_blank(),axis.text.x=element_text(colour="black"),axis.text.y=element_text(colour="black"),axis.ticks=element_line(colour="black"),plot.margin=unit(c(1,1,1,1),"line"))
+pca2 <- ggplot(df, aes(x=PC1, y=PC2,color=Dataset)) + geom_point(size=1.5) +
+      labs(x=paste0("PC1 (", round(p1,2), "%)"), y = paste0("PC2 (", round(p2,2), "%)")) +
+        scale_color_manual(values=cols_palette) + theme
+
+jpeg("pca_ALL_afterCombat.jpg", 
+     bg = "white", res = 600, width = 5, height = 4, units = "in")
+  pca2
+dev.off()
+```
+
+## Save data
+```{r}
+# save in an RData
+save(clinTCGA, exTCGA, clin1, ex1, clin2, ex2, clin3, ex3, clin4, ex4, dat, ex_comb,
+  file="data/clin-ex-info_ALL.Rdata")
+```
+

@@ -1,0 +1,492 @@
+---
+title: "Code for Angio-AP analysis"
+author: "García-Mulero S"
+date: "12/30/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load libraries, genesets, data
+
+Load libraries
+```{r}
+require(reshape); require(ggplot2); library(ggpubr);  
+require(RColorBrewer); library(GSVA); 
+library(survival); library(ggthemes); library(survminer)
+```
+
+Load data
+```{r}
+load("data/clin-ex-info_ALL.Rdata")
+
+```
+
+Load pathways
+```{r}
+# Load broadSet form GSEABase package
+load("data/Pathways.Rdata")
+Pathways
+
+genesets <- list(Angiogenesis=Pathways$BIOCARTA_VEGF_PATHWAY,
+  Antigen_Presentation=Pathways$REACTOME_ANTIGEN_PRESENTATION)
+```
+
+Genesets enrichment
+```{r}
+GSVA.TCGA <- gsva(expr=as.matrix(exTCGA), gset.idx.list=genesets)
+GSVA1 <- gsva(expr=as.matrix(ex1), gset.idx.list=genesets)
+GSVA2 <- gsva(expr=as.matrix(ex2), gset.idx.list=genesets)
+GSVA3 <- gsva(expr=as.matrix(ex3), gset.idx.list=genesets)
+GSVA4 <- gsva(expr=as.matrix(ex4), gset.idx.list=genesets)
+
+# join only GSVA results for pca
+GSVA <- cbind(GSVA.TCGA, GSVA1, GSVA2, GSVA3, GSVA4)
+
+data.st <- as.matrix(t(GSVA))
+intersect(as.character(rownames(data.st)), as.character(dat$ID))
+
+dat <- dat[order(dat$ID),]; data.st <- data.st[order(rownames(data.st)),]
+identical(as.character(rownames(data.st)), as.character(dat$ID))
+
+```
+
+
+Create groups
+```{r}
+
+## perform high/ low labels separatelly in each dataset
+## the, join datasets
+
+# indicate 0 as cutoff
+# combine variables
+
+datTCGA <- merge(clinTCGA, t(GSVA.TCGA), by.x="ID", by.y="row.names")
+datTCGA$Angiogenesis.Q <- ifelse(datTCGA$Angiogenesis>=0, "High Angio", "Low Angio")
+datTCGA$Antigen_Presentation.Q <- ifelse(datTCGA$Antigen_Presentation>=0, "High AP", "Low AP")
+datTCGA$Combined <- paste0(datTCGA$Angiogenesis.Q, " - " , datTCGA$Antigen_Presentation.Q)
+
+dat1 <- merge(clin1, t(GSVA1), by.x="ID", by.y="row.names")
+dat1$Angiogenesis.Q <- ifelse(dat1$Angiogenesis>=0, "High Angio", "Low Angio")
+dat1$Antigen_Presentation.Q <- ifelse(dat1$Antigen_Presentation>=0, "High AP", "Low AP")
+dat1$Combined <- paste0(dat1$Angiogenesis.Q, " - " , dat1$Antigen_Presentation.Q)
+
+dat2 <- merge(clin2, t(GSVA2), by.x="ID", by.y="row.names")
+dat2$Angiogenesis.Q <- ifelse(dat2$Angiogenesis>=0, "High Angio", "Low Angio")
+dat2$Antigen_Presentation.Q <- ifelse(dat2$Antigen_Presentation>=0, "High AP", "Low AP")
+dat2$Combined <- paste0(dat2$Angiogenesis.Q, " - " , dat2$Antigen_Presentation.Q)
+
+dat3 <- merge(clin3, t(GSVA3), by.x="ID", by.y="row.names")
+dat3$Angiogenesis.Q <- ifelse(dat3$Angiogenesis>=0, "High Angio", "Low Angio")
+dat3$Antigen_Presentation.Q <- ifelse(dat3$Antigen_Presentation>=0, "High AP", "Low AP")
+dat3$Combined <- paste0(dat3$Angiogenesis.Q, " - " , dat3$Antigen_Presentation.Q)
+
+dat4 <- merge(clin4, t(GSVA4), by.x="ID", by.y="row.names")
+dat4$Angiogenesis.Q <- ifelse(dat4$Angiogenesis>=0, "High Angio", "Low Angio")
+dat4$Antigen_Presentation.Q <- ifelse(dat4$Antigen_Presentation>=0, "High AP", "Low AP")
+dat4$Combined <- paste0(dat4$Angiogenesis.Q, " - " , dat4$Antigen_Presentation.Q)
+
+
+# join all clinical
+dat <- rbind(datTCGA[,c(1, 26:27, 41, 34, 42:46)],
+	dat1[, c(1, 19:20, 22, 23:28)],
+	dat2[, c(1, 17:18, 20, 21:26)],
+	dat3[, c(1, 12:13, 11, 14:19)],
+	dat4[, c(1, 10, 13, 12, 14:19)]) ## 213 samples
+
+dat$Recurrence <- ifelse(dat$DFS==1, "Recurrent", "Non-recurrent")
+dat$"Angiogenesis-Antigen Presentation" <- dat$Combined
+
+# save in an RData
+save(datTCGA, exTCGA, dat1, ex1, dat2, ex2, dat3, ex3, dat4, ex4, dat, ex_comb,
+  file="data/angio-ap-info_ALL.Rdata")
+```
+
+
+Survival analysis
+```{r}
+# fit survival function
+coxDFS <- coxph(Surv(as.numeric(DFS.Months), as.numeric(DFS)) ~ dat$"Angiogenesis-Antigen Presentation" + strata(dataset), data=dat)
+fitDFS <- survfit(Surv(as.numeric(DFS.Months), as.numeric(DFS)) ~ dat$"Angiogenesis-Antigen Presentation", data=dat) # for dfs
+
+kmDFS <- ggsurvplot(fitDFS, data=dat, 
+            font.x = c(10, "plain", "black"),
+            font.y = c(10, "plain", "black"),
+            font.title= c(10, "plain", "black"),
+            pval = TRUE, pval.size=4, pval.coord = c(10, 0.1),
+            font.legend = c(9, "plain", "black"), 
+            palette=c("firebrick3", "lightpink1","skyblue1", "dodgerblue4"), 
+            ylab="Progression free survival probability",
+            legend.title = "",
+			      legend.labs = c("High Angio - High AP", "High Angio - Low AP", "Low Angio - High AP", "Low Angio - Low AP"),
+            legend = c(0.75, 0.9)) 
+
+
+png("res/KM_combined_ALL_broadsets.tiff", 
+   width = 4.5, height = 4, units = "in" ,  res = 400);
+  kmDFS$plot
+dev.off()
+
+### 5-years relapse rate (5 years == 60 months)
+
+rate_HH <- survfit(Surv(as.numeric(DFS.Months), as.numeric(DFS))~1, data=dat[dat$Combined=="High Angio - High AP",])
+summary(rate_HH)
+
+rate_LL <- survfit(Surv(as.numeric(DFS.Months), as.numeric(DFS))~1, data=dat[dat$Combined=="Low Angio - Low AP",])
+summary(rate_LL)
+```
+
+Angio-AP correlation
+```{r}
+head(dat)
+
+# density plots
+dat.m <- melt(dat[, c("Angiogenesis", "Antigen_Presentation")])
+
+density <- ggplot(aes(x=value, color=variable), data=dat.m) +
+	  geom_density() + xlim(-1,1)
+
+jpeg("res/density_scores_ALL.jpg", 
+ height=5, width=6,  res = 600, units="in")      
+density 
+dev.off()
+
+
+# dotplot con 0  y los valores -1 a 1 y correlation lines
+graph <- ggplot(dat) +
+  geom_point(aes(x=Antigen_Presentation, y=Angiogenesis, color=Recurrence), size=3) +
+  scale_color_manual(values=c("grey75", "grey35")) +
+  geom_hline(yintercept= 0, linetype="dashed", color = "red") +
+  geom_vline(xintercept = 0, linetype="dashed", color = "red") +
+  geom_smooth(aes(x=Antigen_Presentation, y=Angiogenesis, color=Recurrence), method=lm, se=FALSE, fullrange=TRUE) +
+  geom_smooth(aes(x=Antigen_Presentation, y=Angiogenesis), color="black", method=lm, se=FALSE, fullrange=TRUE) +
+  scale_fill_manual(values = c("grey60", "grey40")) +
+  stat_cor(aes(x=Antigen_Presentation, y=Angiogenesis, color=Recurrence), label.x.npc=0.6, label.y.npc=0.05, hjust=0, method = "spearman") +
+  stat_cor(aes(x=Antigen_Presentation, y=Angiogenesis), label.x.npc=0.6, label.y.npc=0.11, hjust=0, method = "spearman") +
+  theme_classic() + xlab("Antigen Presentation") + border()
+  #+geom_rug(aes(x=Antigen_Presentation, y=Angiogenesis, color=Recurrence))
+
+jpeg("res/dotplot_scores_ALL_Correlation.jpg", 
+ height=4.5, width=6,  res = 600, units="in")      
+graph 
+dev.off()
+
+```
+
+
+Barplot of recurrence by group
+```{r}
+table(dat$Combined, dat$Recurrence)
+
+addmargins(table(dat$Combined, dat$Recurrence))
+perc_table <- addmargins(round(prop.table(table(dat$Combined, dat$Recurrence)),3))
+
+# test
+chisq.test(dat$Combined, dat$Recurrence)
+
+### Plot percentages
+cont_table <- as.matrix(table(dat$Combined, dat$Recurrence))
+perc_table1 <- prop.table(cont_table,margin=1)*100
+dat1 <- melt(perc_table1)
+colnames(dat1) <- c("Combined", "Recurrence", "value")
+
+# plots
+barplot1 <- ggplot(data = dat1, aes(x = Combined, 
+	y = value, fill = Recurrence)) + 
+  geom_bar(stat = 'identity') +  
+  theme_classic() +
+  scale_fill_manual(values=c("grey85", "grey35")) +
+  theme(axis.text.x = element_text(angle=45, hjust=1)) +
+  labs(y = "Frequency(%)", x="", title="Angiogenesis - Antigen Presentation") +
+  theme(plot.title = element_text(size=10))
+barplot1
+
+jpeg("res/barplot1_angio-ap_ALL_DEF.jpg", 
+     units="in", width=5, height=4, res=400)
+barplot1
+dev.off()
+```
+
+TIS score by group
+```{r}
+TIS <- c("CCL5", "CD27", "CD274", "CD276", "CD8A", "CMKLR1", "CXCL9", "HLA-DQA1", "HLA-DRB1", "HLA-E", "IDO1", "LAG3", "NKG7", "PDCD1LG2", "PSMB10", "STAT1", "TIGIT")
+
+### TIS-scores between the four groups
+GSVA.TCGA <- gsva(expr=as.matrix(exTCGA), gset.idx.list=list(TIS=TIS))
+GSVA1 <- gsva(expr=as.matrix(ex1), gset.idx.list=list(TIS=TIS))
+GSVA2 <- gsva(expr=as.matrix(ex2), gset.idx.list=list(TIS=TIS))
+GSVA3 <- gsva(expr=as.matrix(ex3), gset.idx.list=list(TIS=TIS))
+GSVA4 <- gsva(expr=as.matrix(ex4), gset.idx.list=list(TIS=TIS))
+
+# join only GSVA results for pca
+GSVA <- cbind(GSVA.TCGA, GSVA1, GSVA2, GSVA3, GSVA4)
+
+# merge
+dat_TIS <- merge(dat, t(GSVA), by.x="ID", by.y="row.names")
+
+# plot
+
+compare_means(TIS ~ Combined,  data = dat_TIS, method = "kruskal.test")
+compare_means(TIS ~ Combined,  data = dat_TIS)
+my_comparisons <- list( c("High Angio - High AP", "Low Angio - High AP"), c("High Angio - High AP", "High Angio - Low AP"))
+
+TISplot <-ggplot(dat_TIS, aes(x=Combined, y=TIS)) +
+         geom_boxplot(color="black", outlier.shape=NA) +
+         geom_jitter(position=position_jitter(0.1), size=1.5, 
+            aes(x=Combined, y=TIS, color=Recurrence)) +
+         scale_color_manual(values=c("grey75", "grey35")) +
+         theme_classic() + border() +
+         theme(axis.text.x = element_text(angle=45, hjust=1)) +
+         labs(x="", y = "TIS score") + annotate(geom="text", label="p < 2e-16", size=3, x=4, y=0.9)
+         #stat_compare_means(method="kruskal.test", size=3, label.y.npc=0.95, label.x.npc=0.3, label="p.format")
+
+
+png("res/TIS_score_ALL_combined.tiff", 
+ height=3.5, width=5,  res = 600, units="in")      
+TISplot
+dev.off()
+```
+
+Months to reccurece by group
+```{r}
+### DFS between different groups
+compare_means(DFS.Months ~ Combined,  data = dat[dat$DFS==1,], method = "kruskal.test")
+compare_means(DFS.Months ~ Combined,  data = dat[dat$DFS==1,])
+
+bp.cluster <-ggplot(dat[dat$DFS==1,], aes(x=Combined, y=DFS.Months)) +
+         geom_boxplot(color="black", outlier.shape=NA) +
+               geom_jitter(position=position_jitter(0.1), size=1.5, 
+            aes(x=Combined, y=DFS.Months), alpha=0.5) +
+         labs(x="", y = "Months to Recurrence") +
+         theme(axis.text.x = element_text(angle=45, hjust=1)) +
+         stat_compare_means(method="kruskal.test", 
+          label="p.format", label.y.npc=0.95)
+
+png("res/boxplot_DFS_groups_ALL.tiff", 
+ height=3.5, width=4,  res = 600, units="in")      
+bp.cluster
+dev.off()
+```
+
+## Functional analysis
+
+GSEA high-high VS low-low
+```{r}
+## create groups for GSEA
+## only recurrent samples
+dat2 <- dat[dat$Recurrence=="Recurrent",]
+dat2 <- dat2[dat2$Combined=="High Angio - High AP" | dat2$Combined=="Low Angio - Low AP",]
+table(dat2$Combined)
+
+ex.gsva <- ex_comb[, colnames(ex_comb) %in% dat2$ID]
+dim(ex.gsva)
+
+ex.gsva <- ex.gsva[, order(colnames(ex.gsva))]
+dat2 <- dat2[order(dat2$ID),]
+identical(as.character(colnames(ex2)), as.character(dat2$ID)) # TRUE
+ex.gsva2 <- ex.gsva
+
+# remove rownames
+ex.gsva <- as.data.frame(ex.gsva)
+ex.gsva$gene <- rownames(ex.gsva)
+rownames(ex.gsva) <- NULL
+
+ex.gsva <- ex.gsva[,c(ncol(ex.gsva),1:ncol(ex.gsva)-1)]
+head(ex.gsva)
+
+write.table(ex.gsva, file="ex_recurrent_gsea.txt", 
+  sep="\t", quote=F, col.names=T, row.names=F)
+
+# pheno data
+table(dat2$Combined)
+dat2$Combined2 <- ifelse(dat2$Combined=="High Angio - High AP", "High-High", "Low-Low")
+pheno <- dat2$Combined2
+pheno2 <- as.data.frame(t(pheno))
+data.class(pheno2)
+dim(pheno2)
+
+write.table(pheno2, file="pheno_recurrent_gsea.txt",   
+  sep="\t", quote=F, col.names=F, row.names=F)
+```
+
+
+GSEA with clusterProfiler
+```{r}
+## perform Differential expression
+library(ReactomePA); library(biomaRt); library(annotate); library(clusterProfiler); 
+library(limma); library(enrichplot); 
+
+# groups
+group <- factor(dat2$Combined2, levels=c("Low-Low", "High-High"))
+design <- model.matrix(~group)
+identical(as.character(colnames(ex.gsva2)), as.character(dat2$ID))
+fit <- lmFit(ex.gsva2, design)
+
+# bayesian comparison
+fit <- eBayes(fit, trend=TRUE)
+de_genes <- topTable(fit, adjust="fdr", number = nrow(as.data.frame(fit)))
+head(de_genes)
+de_genes <- de_genes[order(de_genes$logFC, decreasing=T),] # order by Log2
+de_filt <- de_genes[de_genes$adj.P.Val<=0.05 & abs(de_genes$logFC)>=1.5,] # 1156
+dim(de_filt); head(de_filt)
+
+# gene list
+geneList = as.numeric(de_genes$logFC)
+names(geneList) = rownames(de_genes)
+geneList <- geneList[order(geneList, decreasing=T)] # enriched in High
+
+# load genesets
+load("MSigDB_broad_Allgenesets_2020.Rdata")
+
+## calculate GSEA hallmakrs
+gsea.high.hallmarks <- GSEA(geneList, TERM2GENE = hallmarks)
+head(as.data.frame(gsea.high.hallmarks))
+gsea.high.hallmarks$ID
+write.table(as.data.frame(gsea.high.hallmarks), file="res/gsea_clusterprofiler_list_HH.txt", col.names=T, row.names=F, quote=F, sep="\t")
+
+# plot recurrent high enriched pathways
+png("res/GSEAPlot_clusterprofiles_recurrent_ALL_HH.tiff", 
+     height=13, width=14, res = 600, units="in")   
+gseaplot2(gsea.high.hallmarks, geneSetID = c(3,4,5,7,8,9,10,11,24,29),
+  pvalue_table = TRUE)
+dev.off()
+
+# plot recurrent high enriched pathways individually
+for (i in c(3,4,5,6,7,9,10,11,15,24,29)){
+  anno <- gsea.high.hallmarks[i, c("NES", "pvalue", "p.adjust")]
+  lab <- paste0(names(anno), "=",  round(anno, 3), collapse="\n")
+
+  png(paste0("res/GSEAPlot_clusterprofiles_recurrent_ALL_HH_", rownames(anno), ".tiff"), 
+       height=4.25, width=5, res = 600, units="in")   
+    gseaplot2(gsea.high.hallmarks, geneSetID = i, 
+    title = gsea.high.hallmarks$Description[i]) +
+    annotate("text", 0.7, 0.75, label = lab, hjust=0, vjust=0, size=4.5)
+  dev.off()
+}
+``` 
+
+Functional analysis with enrichR and ReactomePA
+```{r}
+### Geneset enrichment reactomepa
+library(ReactomePA); library(enrichplot); library(DOSE)
+
+## being ex_nes a preranked expression matrix ordered manually by any differential expression we want to do with limma or others
+#geneset enrichment
+
+annot <- read.delim("/mnt/hydra/ubs/shared/users/Sandra/annot/human_annot/data/annot_hgcn_genes.txt", sep="\t", header=T, stringsAsFactors=F)
+de_genes_annot <- merge(de_genes, annot[,c("entrez_id", "symbol")], by.x="row.names", by.y="symbol")
+de_genes_annot <- de_genes_annot[order(de_genes_annot$logFC, decreasing=TRUE),]
+head(de_genes_annot)
+#geneList = as.numeric(de_genes_annot$logFC)
+#names(geneList) = 
+geneList = de_genes_annot$entrez_id
+
+x <- enrichPathway(gene=geneList,pvalueCutoff=0.05, readable=T)
+write.table(x, file="res/reactomepa_list_HH_LL.txt", col.names=T, row.names=F, quote=F, sep="\t")
+
+
+png("res/geneset_enrich_HH_LL_dotplot1.tiff", 
+   height=4.5, width=7, res = 600, units="in")   
+  dotplot(x, showCategory=15)
+dev.off()
+```
+
+
+## Hierarchical clustering and heatmap
+```{r}
+# dendograms
+d1 <- dist(data.st, method = "euclidean") 
+hcl1 <- hclust(d1, method="average") # samples
+
+# rotate function
+rotate.dendrogram2 <- function(x, order, ...)
+  {
+    if(missing(order)) { # if order is missing - return the same tree.
+      warning("'order' parameter is missing, returning the tree as it was.")
+      return(x)  
+    }
+    
+    labels_x <- labels(x) 
+    order_x <- order.dendrogram(x)
+    number_of_leaves <- length(order_x)
+    
+    
+    if(!is.numeric(order)) {
+      order <- as.character(order)
+      if(length(intersect(order, labels_x)) != number_of_leaves) {
+        stop("'order' is neither numeric nor a vector with ALL of the labels (in the order you want them to be)")
+      }
+      order <- match(order, labels_x)
+    }
+    
+    weights <- seq_len(number_of_leaves)
+    weights_for_order <- numeric(number_of_leaves)
+    weights_for_order[order_x[order]] <- weights
+    reorder(x, weights_for_order, mean,...)
+  }
+rotate <- function(...) as.hclust(rotate.dendrogram2(as.dendrogram(hcl1),20))
+
+# colors 
+bk <- c(seq(min(as.numeric(data.st)),max(as.numeric(data.st)), length=100))
+
+# Data frame with column annotations
+dat$Recurrence <- ifelse(dat$DFS==1, "Recurrent", "Non-recurrent")
+table(dat$Recurrence)
+table(dat$Combined)
+
+mat_col <- data.frame('Recurrence' = dat$Recurrence,
+  "Dataset" = dat$dataset,
+  "Combined" = dat$Combined,
+  "Chr3_status" = dat$chr3_status)
+rownames(mat_col) <- dat$ID
+
+# List with colors for each annotation.
+
+#colors
+library(RColorBrewer); library(gplots)
+ncol <- length(unique(dat$dataset))
+cols_palette1 <- brewer.pal(8, "Dark2")[c(1:4,6:8)]
+cols_palette2 <- brewer.pal(8, "RdBu")[c(1:4,6:8)]
+cols_palette <- c(cols_palette1, cols_palette2)[1:ncol]
+
+
+ncol1 <- length(unique(dat$dataset))
+ncol2 <- length(unique(dat$chr3_status))
+cols_palette1 <- brewer.pal(8, "Dark2")[c(1:4,6:8)][1:ncol1]
+cols_palette2 <- brewer.pal(8, "RdBu")[c(1,3,7)]
+
+
+mat_colors <- list('Recurrence' =  c("grey90", "grey40"),
+  "Dataset"=cols_palette1, 
+  "Combined"= c("firebrick3", "lightpink1","skyblue1", "dodgerblue4"),
+  "Chr3_status" = c("#4393C3", "#F4A582", "grey60", "#B2182B"))
+names(mat_colors$'Recurrence') <- as.character(names(table(dat$Recurrence)))
+names(mat_colors$'Dataset') <- as.character(names(table(dat$dataset)))
+names(mat_colors$'Combined') <- as.character(names(table(dat$Combined)))
+names(mat_colors$'Chr3_status') <- as.character(names(table(dat$chr3_status)))
+
+
+library(pheatmap)
+heatmap <- pheatmap(mat = t(data.st),
+         color = colorpanel(n=length(bk)-1, low="blue3", mid="snow", high="red3"),
+         border_color = NA, show_colnames = FALSE, 
+         show_rownames = TRUE,
+         cluster_cols = rotate(hcl1,3:1), 
+         annotation_col = mat_col, 
+         annotation_colors = mat_colors,
+         #drop_levels = TRUE, 
+         fontsize = 7, cellwidth=1.5, cellheight=15)
+
+heatmap
+
+## euclidean with average and rotate 3:1
+
+# plot heatmap
+png("res/heatmap_angio-antigenpresentation.tiff", 
+ height=7, width=8,  res = 600, units="in")      
+heatmap
+dev.off()
+```
+

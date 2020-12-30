@@ -1,0 +1,92 @@
+---
+title: "Survival analysis"
+author: "García-Mulero S"
+date: "12/30/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load packages
+```{r}
+require(reshape); require(ggplot2); library(ggpubr);  
+library(survival); library(ggthemes); library(survminer)
+```
+
+Load data
+```{r}
+load("data/clin-ex-info_ALL.Rdata")
+```
+
+Select genes
+```{r}
+apGenes <- c("TAP1", "TAP2", "B2M", "CALR", "HLA-A", "HLA-B", "HLA-C",  "HLA-E", "HLA-F", "HLA-G")
+
+#filter only present in the expression data frame
+apGenes <- apGenes[apGenes %in% common_genes]
+```
+
+Function for KM
+```{r}
+### KM genes new: adjusting by dataset and km with high/low per dataset
+survival <- function(gene){
+
+  # perform high/low for each dataset
+  exTCGA_gene <- exTCGA[gene,]
+  ex1_gene <- ex1[gene,]
+  ex2_gene <- ex2[gene,]
+  ex3_gene <- ex3[gene,]
+
+  # merge with clinical
+  datTCGA <- merge(clinTCGA, t(exTCGA_gene), by.x="ID", by.y="row.names")
+  dat1 <- merge(clin1, t(ex1_gene), by.x="ID", by.y="row.names")
+  dat2 <- merge(clin2, t(ex2_gene), by.x="ID", by.y="row.names")
+  dat3 <- merge(clin3, t(ex3_gene), by.x="ID", by.y="row.names")
+  datTCGA$ex_gene <- as.numeric(datTCGA[, ncol(datTCGA)])
+  dat1$ex_gene <- as.numeric(dat1[, ncol(dat1)])
+  dat2$ex_gene <- as.numeric(dat2[, ncol(dat2)])
+  dat3$ex_gene <- as.numeric(dat3[, ncol(dat3)])
+
+  # median info
+  datTCGA$gene_est <- ifelse(datTCGA$ex_gene >= median(datTCGA$ex_gene), "High", "Low")
+  dat1$gene_est <- ifelse(dat1$ex_gene >= median(dat1$ex_gene), "High", "Low")
+  dat2$gene_est <- ifelse(dat2$ex_gene >= median(dat2$ex_gene), "High", "Low")
+  dat3$gene_est <- ifelse(dat3$ex_gene >= median(dat3$ex_gene), "High", "Low")
+
+  dat <- rbind(datTCGA[, c("DFS", "DFS.Months", "gene_est")],
+  	dat1[, c("DFS", "DFS.Months", "gene_est")],
+    dat2[, c("DFS", "DFS.Months", "gene_est")],
+    dat3[, c("DFS", "DFS.Months", "gene_est")])
+
+  # fit survival function
+  fitDFS<- survfit(Surv(as.numeric(DFS.Months), as.numeric(DFS)) ~ gene_est, data=dat) # for OS
+  Cox <- coxph(Surv(as.numeric(DFS.Months), as.numeric(DFS)) ~ gene_est, data=dat)
+  pval <- as.numeric(summary(Cox)$coefficients[[5]])
+
+  kmDFS<- ggsurvplot(fitDFS, data=dat, 
+              font.x = c(12, "plain", "black"),
+              font.y = c(12, "plain", "black"),
+              pval = TRUE, pval.size=4, pval.coord = c(90, 0.9),
+              font.legend = c(12, "plain", "black"),       
+              palette=c("firebrick3", "dodgerblue4"), 
+              legend.title = gene,
+              legend.labs=c("High", "Low"),
+              ylab="Progression free survival",
+              xlab="Time (Months)")
+
+  splot <- list(); splot[[1]] <- kmDFS
+  jpeg(paste0("res/uveal_all_km_", gene,".jpg"), 
+       width = 3, height = 3, units = "in" ,  res = 600);
+    arrange_ggsurvplots(splot, print = TRUE,
+  		ncol = 1, nrow = 1)	
+  dev.off()
+}
+```
+
+Perform survival function
+```{r}
+for (gene in apGenes){ survival(gene)}
+```
+
